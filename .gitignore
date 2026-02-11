@@ -25,7 +25,6 @@ env/
 data/
 content/
 diagram/
-tests/
 
 # -- IDE / editor --
 .vscode/
