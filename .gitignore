@@ -1,0 +1,48 @@
+# =============================================================================
+# Dynamic Embedding RAG — .gitignore
+# =============================================================================
+
+# -- Environment files (contain secrets / local config) --
+.env.local
+.env.docker
+.env
+
+# -- Python --
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# -- Virtual environments --
+.venv/
+venv/
+env/
+
+# -- Data & storage (runtime artifacts) --
+data/
+content/
+diagram/
+tests/
+
+# -- IDE / editor --
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# -- Testing / linting --
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# -- OS files --
+.DS_Store
+Thumbs.db
+
+# -- Docker (optional local overrides) --
+docker-compose.override.yml

@@ -1,0 +1,29 @@
+# Core
+gradio>=4.0
+qdrant-client>=1.16
+sentence-transformers>=2.2
+torch
+numpy
+
+# Document processing
+beautifulsoup4
+lxml
+requests
+tqdm
+
+# File watching (streaming data source)
+watchdog>=3.0
+
+# LLM providers
+ollama
+openai
+
+# Environment
+python-dotenv
+
+# Testing
+pytest
+
+# Optional: advanced chunking
+# unstructured
+# nltk
