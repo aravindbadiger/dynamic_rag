@@ -53,23 +53,58 @@ dynamic_embedding_rag_project/
 
 ## Quick Start
 
+### 1. Clone and Setup
+
 ```bash
-# 1. Install dependencies
+git clone <repo-url>
+cd dynamic_embedding_rag_project
+cp .env.example .env.local  # (optional) customize environment
+```
+
+### 2. Install Dependencies (Local Python)
+
+```bash
 make install
+```
 
-# 2. Create the Qdrant collection
+### 3. Start All Services (Recommended: Docker Compose)
+
+```bash
+docker-compose up --build
+```
+- This launches Kafka, Qdrant, producers, consumers, status service, and UI in containers.
+- Logs for each service are visible in the terminal.
+
+### 4. Initialize Qdrant Collection (if running locally)
+
+```bash
 make schema-create
+```
 
-# 3a. One-shot: ingest all files in content/
-make ingest-scan
+### 5. Ingest Data
+- **Drop files** into the `content/` directory. They will be detected and ingested automatically.
+- Or trigger ingestion manually:
 
-# 3b. OR continuous: watch for new files and ingest on arrival
-make ingest-watch
+```bash
+make ingest-scan      # One-shot: ingest all files in content/
+make ingest-watch     # Continuous: watch for new files
+```
 
-# 4. Query the vector DB
+### 6. Query the Vector DB
+
+```bash
 python rag_client.py "What is machine learning?"
 python rag_client.py --interactive
 ```
+
+### 7. Monitor Status & Troubleshooting
+- Visit the Status Service API (see logs for port)
+- Check logs for errors (Kafka message size, embedding, etc.)
+- If you see `MSG_SIZE_TOO_LARGE`, ensure chunking is enabled and Kafka is using default or increased message size.
+
+---
+
+For advanced usage, ingestion modes, and schema management, see below.
 
 ## Ingestion Modes
 
