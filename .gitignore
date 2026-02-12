@@ -25,6 +25,7 @@ env/
 data/
 content/
 diagram/
+backup/
 
 # -- IDE / editor --
 .vscode/

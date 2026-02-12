@@ -25,8 +25,4 @@ COPY . .
 # Create runtime directories
 RUN mkdir -p data/chunks data/qdrant_storage content
 
-# ── Expose Gradio UI port ─────────────────────────────────────────────
-EXPOSE 7861
 
-# ── Default: launch the Gradio UI ─────────────────────────────────────
-CMD ["python", "rag_client.py"]

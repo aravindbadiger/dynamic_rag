@@ -1,8 +1,16 @@
+
+import os
+# =============================================================================
+# KAFKA SEARCH TOPICS
+# =============================================================================
+KAFKA_SEARCH_REQUEST_TOPIC = os.environ.get("KAFKA_SEARCH_REQUEST_TOPIC", "vector-search-request")
+KAFKA_SEARCH_RESPONSE_TOPIC = os.environ.get("KAFKA_SEARCH_RESPONSE_TOPIC", "vector-search-response")
+KAFKA_SEARCH_CONSUMER_GROUP = os.environ.get("KAFKA_SEARCH_CONSUMER_GROUP", "qdrant-search-consumer-group")
+KAFKA_SEARCH_CLIENT_GROUP = os.environ.get("KAFKA_SEARCH_CLIENT_GROUP", "rag-client-search-group")
 """
 Configuration settings for the Dynamic Embedding RAG project.
 Supports environment variables for Docker deployment.
 """
-import os
 from pathlib import Path
 
 # =============================================================================

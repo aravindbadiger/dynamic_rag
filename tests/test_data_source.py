@@ -14,16 +14,7 @@ from data_source import (
 )
 
 
-class TestFileEvent:
-    def test_extension(self):
-        fe = FileEvent(path=Path("test.txt"))
-        assert fe.extension == ".txt"
-
-    def test_repr(self):
-        fe = FileEvent(path=Path("test.md"), event_type="created")
-        assert "created" in repr(fe) and "test.md" in repr(fe)
-
-
+## DirectoryWatcher/FileEvent tests removed (now handled by producer integration)
 class TestExtractText:
     def test_plain_text(self, tmp_path: Path):
         f = tmp_path / "sample.txt"

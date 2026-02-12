@@ -1,12 +1,39 @@
-"""
-RAG Client — query the vector DB with natural language.
-
-Supports three interfaces:
-  • Gradio web UI   (default: ``python rag_client.py``)
-  • CLI one-shot    (``python rag_client.py "question"``)
-  • CLI interactive  (``python rag_client.py --interactive``)
-"""
+# ═══════════════════════════════════════════════════════════════════════════
+# RAG Client — query the vector DB with natural language.
+#
+# Supports three interfaces:
+#   • Gradio web UI   (default: ``python rag_client.py``)
+#   • CLI one-shot    (``python rag_client.py "question"``)
+#   • CLI interactive  (``python rag_client.py --interactive``)
+# ═══════════════════════════════════════════════════════════════════════════
 from __future__ import annotations
+import requests
+# ═══════════════════════════════════════════════════════════════════════════
+# Status Service Integration
+# ═══════════════════════════════════════════════════════════════════════════
+
+def fetch_producer_status() -> str:
+    """Fetch and format producer status from the status service HTTP API."""
+    try:
+        resp = requests.get(os.environ.get("STATUS_SERVICE_URL", "http://status-service:8080/status"), timeout=2)
+        if resp.status_code != 200:
+            return f"❌ Status service error: {resp.status_code}"
+        data = resp.json()
+        if not data:
+            return "No producer status available."
+        lines = ["### Producer Status"]
+        for producer_id, status in data.items():
+            lines.append(f"**{producer_id}** — `{status.get('status', 'unknown')}` at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(status.get('timestamp', 0)))}")
+            if status.get('file_path'):
+                lines.append(f"- File: `{status['file_path']}`")
+            if status.get('details'):
+                lines.append(f"- Details: {status['details']}")
+            if status.get('error'):
+                lines.append(f"- Error: {status['error']}")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"❌ Could not fetch status: {e}"
 
 import argparse
 import json
@@ -22,9 +49,8 @@ import gradio as gr
 
 import embeddings
 import qdrant_utils
-import ingest_data as ingester
 import llm as llm_module
-from data_source import DirectoryWatcher, scan_directory
+from data_source import scan_directory
 
 import config
 
@@ -45,19 +71,30 @@ def query(
     score_threshold: float | None = None,
     collection_name: str | None = None,
 ) -> List[Dict[str, Any]]:
+    print("DEBUG: query() called with question:", question)
     """
-    Embed the question and search the vector DB for relevant chunks.
+    Embed the question and search the vector DB for relevant chunks via Kafka.
 
     Returns a list of result dicts with: text, score, source_file, metadata.
     """
+    import requests
     vec = embeddings.embed_text(question)
-    results = qdrant_utils.search(
-        query_vector=vec,
-        top_k=top_k,
-        score_threshold=score_threshold,
-        collection_name=collection_name,
-    )
-    return results
+    SEARCH_PRODUCER_URL = os.environ.get("SEARCH_PRODUCER_URL", "http://localhost:8081/search")
+    req = {
+        "query_vector": vec.tolist() if hasattr(vec, 'tolist') else vec,
+        "top_k": top_k,
+        "score_threshold": score_threshold,
+        "collection_name": collection_name,
+    }
+    try:
+        resp = requests.post(SEARCH_PRODUCER_URL, json=req, timeout=15)
+        if resp.status_code == 200:
+            return resp.json().get("results", [])
+        else:
+            return []
+    except Exception as e:
+        logger.error(f"Search producer REST call failed: {e}")
+        return []
 
 
 def format_results(results: List[Dict[str, Any]]) -> str:
@@ -111,10 +148,6 @@ def ask(
 # Gradio UI
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Background watcher state (shared across Gradio callbacks)
-_watcher_thread: Optional[threading.Thread] = None
-_watcher_instance: Optional[DirectoryWatcher] = None
-_watcher_stats = {"files": 0, "chunks": 0, "running": False, "started_at": None}
 
 
 def _gradio_search(question: str, top_k: int, threshold: float):
@@ -186,145 +219,34 @@ def _gradio_ask(question: str, top_k: int, threshold: float, provider: str, temp
         return f"❌ Error: {exc}", ""
 
 
+
 def _gradio_ingest_file(file_obj):
-    """Gradio callback: ingest an uploaded file."""
+    """Gradio callback: upload a file to the data source directory."""
     if file_obj is None:
         return "⚠️ No file uploaded."
-
-    # Gradio gives us a temp path; copy into content/ for persistence
     src = Path(file_obj.name if hasattr(file_obj, "name") else file_obj)
     dest = config.CONTENT_DIR / src.name
     dest.write_bytes(src.read_bytes())
+    return f"✅ **{dest.name}** uploaded to data source.\n\nThe streaming pipeline will ingest it automatically."
 
-    try:
-        qdrant_utils.ensure_collection()
-        count = ingester._stream_file(dest)
-        info = qdrant_utils.collection_info()
-        return (
-            f"✅ **{dest.name}** ingested — **{count}** chunks created.\n\n"
-            f"Collection now has **{info['points_count']}** points."
-        )
-    except Exception as exc:
-        logger.exception("Ingest error")
-        return f"❌ Error: {exc}"
 
 
 def _gradio_ingest_scan():
-    """Gradio callback: run a one-shot scan of content/."""
-    try:
-        summary = ingester.ingest_scan()
-        return (
-            f"✅ Scan complete.\n\n"
-            f"- Files ingested: **{summary['files_ingested']}**\n"
-            f"- Chunks created: **{summary['chunks_created']}**\n"
-            f"- Time: **{summary['elapsed_seconds']}s**"
-        )
-    except Exception as exc:
-        logger.exception("Scan error")
-        return f"❌ Error: {exc}"
+    """Gradio callback: trigger a scan event for the producer."""
+    # Send a 'rescan' event to the producer's Kafka topic
+    from confluent_kafka import Producer
+    producer = Producer({'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS})
+    topic = config.KAFKA_FILE_TOPIC
+    msg = {"event_type": "rescan"}
+    producer.produce(topic, value=json.dumps(msg))
+    producer.flush()
+    return "✅ Rescan event sent.\n\nThe streaming pipeline will process any new or changed files."
 
 
-def _watcher_loop(scan_existing: bool = True):
-    """
-    Background thread that continuously watches content/ for new files
-    and streams them through the ingestion pipeline.
-
-    This runs for the entire lifetime of the application.
-    """
-    global _watcher_instance
-    _watcher_instance = DirectoryWatcher(
-        directory=config.CONTENT_DIR, scan_existing=scan_existing
-    )
-    _watcher_instance.start()
-    _watcher_stats["running"] = True
-    _watcher_stats["started_at"] = time.time()
-
-    logger.info("🔄 Background watcher active — monitoring %s", config.CONTENT_DIR)
-
-    try:
-        for fe in _watcher_instance:
-            if not _watcher_stats["running"]:
-                break
-            try:
-                count = ingester._stream_file(fe.path)
-                _watcher_stats["files"] += 1
-                _watcher_stats["chunks"] += count
-                logger.info(
-                    "📥 Auto-ingested %s — %d chunks (total files: %d, chunks: %d)",
-                    fe.path.name, count,
-                    _watcher_stats["files"], _watcher_stats["chunks"],
-                )
-            except Exception:
-                logger.exception("Watcher ingest error for %s", fe.path.name)
-    finally:
-        _watcher_stats["running"] = False
-        if _watcher_instance:
-            _watcher_instance.stop()
-            _watcher_instance = None
 
 
-def start_background_watcher(scan_existing: bool = True) -> None:
-    """
-    Start the directory watcher as a daemon thread.
-
-    Called automatically when the RAG client starts. The watcher runs
-    for the entire lifetime of the process — any file dropped into
-    ``content/`` is automatically chunked, embedded, and ingested.
-    """
-    global _watcher_thread
-    if _watcher_stats["running"]:
-        logger.info("Watcher already running — skipping duplicate start.")
-        return
-
-    qdrant_utils.ensure_collection()
-    _watcher_stats.update(files=0, chunks=0, running=True, started_at=time.time())
-    _watcher_thread = threading.Thread(
-        target=_watcher_loop,
-        kwargs={"scan_existing": scan_existing},
-        daemon=True,
-        name="content-watcher",
-    )
-    _watcher_thread.start()
-    logger.info("✅ Background content watcher started (scan_existing=%s)", scan_existing)
 
 
-def _gradio_watcher_status():
-    """Gradio callback: show live watcher stats."""
-    if not _watcher_stats["running"]:
-        return "🔴 **Watcher is not running.**"
-
-    uptime = time.time() - (_watcher_stats["started_at"] or time.time())
-    mins, secs = divmod(int(uptime), 60)
-    hrs, mins = divmod(mins, 60)
-    uptime_str = f"{hrs}h {mins}m {secs}s" if hrs else f"{mins}m {secs}s"
-
-    return (
-        f"🟢 **Watcher is running** — uptime: {uptime_str}\n\n"
-        f"- Files auto-ingested: **{_watcher_stats['files']}**\n"
-        f"- Chunks created: **{_watcher_stats['chunks']}**\n\n"
-        f"Drop files into `content/` — they will be ingested automatically."
-    )
-
-
-def _gradio_collection_status():
-    """Gradio callback: get Qdrant collection status."""
-    try:
-        info = qdrant_utils.collection_info()
-        files_in_content = list(scan_directory(config.CONTENT_DIR))
-        watcher_status = "🟢 Running" if _watcher_stats["running"] else "🔴 Stopped"
-        return (
-            f"### Collection: `{info['name']}`\n\n"
-            f"| Metric | Value |\n|---|---|\n"
-            f"| Points in DB | **{info['points_count']}** |\n"
-            f"| Vector dimension | **{info['vector_size']}** |\n"
-            f"| Collection status | **{info['status']}** |\n"
-            f"| Files in content/ | **{len(files_in_content)}** |\n"
-            f"| Watcher | {watcher_status} |\n"
-            f"| Watcher session files | {_watcher_stats['files']} |\n"
-            f"| Watcher session chunks | {_watcher_stats['chunks']} |\n"
-        )
-    except Exception as exc:
-        return f"⚠️ Could not fetch status: {exc}\n\nMake sure the collection is created (`make schema-create`)."
 
 
 def build_gradio_app() -> gr.Blocks:
@@ -380,7 +302,7 @@ def build_gradio_app() -> gr.Blocks:
             )
 
         # ── Search tab ────────────────────────────────────────────────
-        with gr.Tab("🔎 Search"):
+        with gr.Tab("🔎 Vector Similarity Search"):
             with gr.Row():
                 with gr.Column(scale=3):
                     q_input = gr.Textbox(
@@ -421,8 +343,7 @@ def build_gradio_app() -> gr.Blocks:
         with gr.Tab("📥 Ingest"):
             gr.Markdown(
                 "Upload a file or scan the `content/` directory to ingest documents into Qdrant.\n\n"
-                "The **background watcher** is always active — any file dropped into "
-                "`content/` is automatically chunked, embedded, and ingested."
+                "Ingestion is now handled by streaming producers. See below for live producer status."
             )
 
             with gr.Row():
@@ -436,22 +357,29 @@ def build_gradio_app() -> gr.Blocks:
                     scan_result = gr.Markdown()
 
             gr.Markdown("---")
-            gr.Markdown("### 🔄 Live watcher status")
-            watcher_status_md = gr.Markdown()
-            watcher_refresh_btn = gr.Button("Refresh watcher status", variant="secondary")
-
+            status_md = gr.Markdown()
+            status_refresh_btn = gr.Button("🔄 Refresh producer status", variant="secondary")
+            status_refresh_btn.click(fn=fetch_producer_status, outputs=[status_md])
+            # Auto-load on tab visit
+            app.load(fn=fetch_producer_status, outputs=[status_md])
             upload_btn.click(fn=_gradio_ingest_file, inputs=[upload], outputs=[upload_result])
             scan_btn.click(fn=_gradio_ingest_scan, outputs=[scan_result])
-            watcher_refresh_btn.click(fn=_gradio_watcher_status, outputs=[watcher_status_md])
-            app.load(fn=_gradio_watcher_status, outputs=[watcher_status_md])
 
         # ── Status tab ────────────────────────────────────────────────
-        with gr.Tab("📊 Status"):
-            refresh_btn = gr.Button("Refresh", variant="secondary")
-            status_md = gr.Markdown()
-            refresh_btn.click(fn=_gradio_collection_status, outputs=[status_md])
-            # Auto-load on tab visit
-            app.load(fn=_gradio_collection_status, outputs=[status_md])
+        with gr.Tab("📊 QDrant Statistics"):
+            def fetch_qdrant_stats():
+                try:
+                    resp = requests.get(os.environ.get("QDRANT_STATS_URL", "http://status-service:8080/qdrant-status"), timeout=2)
+                    if resp.status_code != 200:
+                        return f"❌ Status service error: {resp.status_code}"
+                    info = resp.json()
+                    return f"**Qdrant Collection Stats**\n\n- Name: `{info.get('name', 'unknown')}`\n- Points: **{info.get('points_count', 0)}**\n- Status: `{info.get('status', 'unknown')}`\n- Vector size: `{info.get('vector_size', 'unknown')}`"
+                except Exception as e:
+                    return f"❌ Could not fetch Qdrant stats: {e}"
+            stats_md = gr.Markdown()
+            stats_refresh_btn = gr.Button("🔄 Refresh Qdrant stats", variant="secondary")
+            stats_refresh_btn.click(fn=fetch_qdrant_stats, outputs=[stats_md])
+            app.load(fn=fetch_qdrant_stats, outputs=[stats_md])
 
     return app
 
@@ -494,8 +422,6 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.interactive:
-        # Start watcher in background even for CLI interactive mode
-        start_background_watcher(scan_existing=True)
         interactive_mode(collection_name=args.collection)
     elif args.question:
         if args.ask:
@@ -518,12 +444,7 @@ def main() -> None:
             else:
                 print(format_results(results))
     else:
-        # Start the background content watcher before launching the UI.
-        # It will scan existing files in content/ and then continuously
-        # watch for new/modified files for the lifetime of the process.
-        start_background_watcher(scan_existing=True)
-
-        # Launch Gradio UI
+        # Launch Gradio UI only (no background watcher/producer)
         app = build_gradio_app()
         app.launch(
             server_name=config.GRADIO_SERVER_NAME,

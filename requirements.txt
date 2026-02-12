@@ -11,7 +11,9 @@ lxml
 requests
 tqdm
 
-# File watching (streaming data source)
+
+# Kafka client
+confluent-kafka
 watchdog>=3.0
 
 # LLM providers
@@ -27,3 +29,6 @@ pytest
 # Optional: advanced chunking
 # unstructured
 # nltk
+
+# REST API for search producer
+flask

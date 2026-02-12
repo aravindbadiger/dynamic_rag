@@ -140,19 +140,36 @@ class _IngestHandler(FileSystemEventHandler):
         self._extensions = extensions
 
     def _accept(self, path: str) -> bool:
-        return Path(path).suffix.lower() in self._extensions
+        ext = Path(path).suffix.lower()
+        accepted = ext in self._extensions
+        logger.debug(f"Checking extension for {path}: {ext} accepted={accepted}")
+        return accepted
 
     def on_created(self, event: FileSystemEvent) -> None:
-        if not event.is_directory and self._accept(event.src_path):
-            fe = FileEvent(path=Path(event.src_path), event_type="created")
-            logger.info("New file detected: %s", fe.path.name)
-            self._queue.put(fe)
+        logger.debug(f"on_created event: {event}")
+        if not event.is_directory:
+            logger.debug(f"on_created: {event.src_path} is not a directory")
+            if self._accept(event.src_path):
+                fe = FileEvent(path=Path(event.src_path), event_type="created")
+                logger.info("New file detected: %s", fe.path.name)
+                self._queue.put(fe)
+            else:
+                logger.debug(f"on_created: {event.src_path} extension not accepted")
+        else:
+            logger.debug(f"on_created: {event.src_path} is a directory, ignored")
 
     def on_modified(self, event: FileSystemEvent) -> None:
-        if not event.is_directory and self._accept(event.src_path):
-            fe = FileEvent(path=Path(event.src_path), event_type="modified")
-            logger.debug("Modified file detected: %s", fe.path.name)
-            self._queue.put(fe)
+        logger.debug(f"on_modified event: {event}")
+        if not event.is_directory:
+            logger.debug(f"on_modified: {event.src_path} is not a directory")
+            if self._accept(event.src_path):
+                fe = FileEvent(path=Path(event.src_path), event_type="modified")
+                logger.info("Modified file detected: %s", fe.path.name)
+                self._queue.put(fe)
+            else:
+                logger.debug(f"on_modified: {event.src_path} extension not accepted")
+        else:
+            logger.debug(f"on_modified: {event.src_path} is a directory, ignored")
 
 
 class DirectoryWatcher:
@@ -206,6 +223,7 @@ class DirectoryWatcher:
             self.directory,
             self._queue.qsize(),
         )
+        logger.debug(f"Observer started: {self._observer}, handler: {handler}, recursive: True")
 
     def stop(self) -> None:
         """Stop the watcher."""
